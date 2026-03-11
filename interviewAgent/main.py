@@ -1,0 +1,218 @@
+import asyncio
+import os
+import json
+import logging
+import aiohttp
+from dotenv import load_dotenv
+from PIL import Image
+
+from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, llm
+from livekit.agents import VoicePipelineAgent  # noqa (Suppresses the __all__ warning)
+from livekit.plugins import google, silero
+from livekit import rtc
+from google import genai
+from google.genai import types
+
+load_dotenv()
+logger = logging.getLogger("owlyn-worker")
+
+# Initialize the standard Google GenAI client for the Sentinels (Agent 3)
+genai_client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+
+async def entrypoint(ctx: JobContext):
+    logger.info(f"Connecting to room: {ctx.room.name}")
+    await ctx.connect(auto_subscribe=AutoSubscribe.SUBSCRIBE_ALL)
+
+    interview_id = ctx.room.name.replace("interview-", "")
+
+    # --- FETCH CONFIG FROM JAVA ---
+    logger.info(f"Fetching config for interview: {interview_id}")
+    java_url = f"{os.getenv('JAVA_BACKEND_URL')}/api/internal/interviews/{interview_id}/config"
+    config_headers = {"X-Internal-Token": os.getenv("INTERNAL_PYTHON_SECRET")}
+
+    async with aiohttp.ClientSession() as config_session:
+        async with config_session.get(java_url, headers=config_headers) as config_resp:
+            if config_resp.status == 200:
+                config_data = await config_resp.json()
+                session_mode = config_data.get("mode", "STANDARD")
+                agent_instructions = config_data.get("systemPrompt", "You are an interviewer.")
+            else:
+                session_mode = "STANDARD"
+                agent_instructions = "You are Owlyn, a technical interviewer."
+    # -----------------------------------
+
+    candidate_code = "UNKNOWN"
+    transcript_builder: list[str] = []
+    latest_cam_frame: rtc.VideoFrame | None = None
+    latest_screen_frame: rtc.VideoFrame | None = None
+
+    # ==========================================
+    # 1. AGENT 2: THE MASTER INTERVIEWER (VOICE)
+    # ==========================================
+
+    # FIX: Break ChatContext into two lines so PyCharm understands the type
+    chat_context = llm.ChatContext()
+    chat_context.add_message(role="system", content=agent_instructions)
+
+    agent2 = VoicePipelineAgent(
+        vad=ctx.proc.userdata["vad"],
+        stt=google.STT(),
+        llm=google.LLM(model="gemini-3.0-flash"),
+        tts=google.TTS(),
+        chat_ctx=chat_context
+    )
+
+    agent2.start(ctx.room)
+
+    @agent2.on("agent_speech_committed")
+    def on_agent_speech(msg):
+        transcript_builder.append(f"[OWLYN]: {msg.text}")
+
+    @agent2.on("user_speech_committed")
+    def on_user_speech(msg):
+        transcript_builder.append(f"[CANDIDATE]: {msg.text}")
+
+    # ==========================================
+    # 2. SEPARATED VIDEO CAPTURE
+    # ==========================================
+    @ctx.room.on("track_subscribed")
+    def on_track_subscribed(track: rtc.Track, _publication: rtc.TrackPublication, participant: rtc.RemoteParticipant):
+        nonlocal candidate_code
+        candidate_code = participant.identity
+
+        if track.kind == rtc.TrackKind.KIND_VIDEO:
+            if track.source == rtc.TrackSource.SOURCE_CAMERA:
+                logger.info("Camera track received! Starting Proctor capture.")
+                asyncio.create_task(capture_cam_frames(rtc.VideoStream(track)))
+            elif track.source == rtc.TrackSource.SOURCE_SCREEN_SHARE:
+                logger.info("Screen track received! Starting Workspace capture.")
+                asyncio.create_task(capture_screen_frames(rtc.VideoStream(track)))
+
+    async def capture_cam_frames(stream: rtc.VideoStream):
+        nonlocal latest_cam_frame
+        async for event in stream:
+            latest_cam_frame = event.frame
+
+    async def capture_screen_frames(stream: rtc.VideoStream):
+        nonlocal latest_screen_frame
+        async for event in stream:
+            latest_screen_frame = event.frame
+
+    # ==========================================
+    # 3. AGENT 3: THE SENTINELS (BACKGROUND LOOPS)
+    # ==========================================
+    async def analyze_frame_with_gemini(prompt: str, target_frame: rtc.VideoFrame | None) -> str:
+        if target_frame is None:
+            return "OK"
+
+        try:
+            rgba_buffer = target_frame.convert(rtc.VideoBufferType.RGBA)
+
+            image = Image.frombytes("RGBA", (rgba_buffer.width, rgba_buffer.height), bytes(rgba_buffer.data))
+
+            import io
+            img_byte_arr = io.BytesIO()
+            image.convert("RGB").save(img_byte_arr, format='JPEG', quality=70)
+            img_bytes = img_byte_arr.getvalue()
+
+            response = await genai_client.aio.models.generate_content(
+                model="gemini-3.0-flash",
+                contents=[
+                    types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"),
+                    types.Part.from_text(text=prompt)
+                ]
+            )
+            return response.text.strip() if response.text else "OK"
+        except Exception as e:
+            logger.error(f"Vision Analysis Failed: {e}")
+            return "OK"
+
+    async def proctor_sentinel():
+        prompt = "Look at this webcam feed. Is the candidate holding a phone or looking away? If yes, reply with a short warning. If no, reply 'OK'."
+        while True:
+            await asyncio.sleep(10)
+            result = await analyze_frame_with_gemini(prompt, latest_cam_frame)
+
+            if result != "OK" and result != "":
+                logger.warning(f"Proctor Alert: {result}")
+                transcript_builder.append(f"[PROCTOR ALERT]: {result}")
+
+                await agent2.say(result, allow_interruptions=True)
+                agent2.chat_ctx.add_message(role="assistant", content=result)
+
+                payload = json.dumps({"type": "PROCTOR_WARNING", "message": result}).encode("utf-8")
+                await ctx.room.local_participant.publish_data(payload, reliable=True)
+
+    async def workspace_sentinel():
+        prompt = "Look at this code editor. Is there a syntax error or logic bug? If yes, reply with a short hint. If no, reply 'OK'."
+        while True:
+            await asyncio.sleep(15)
+            result = await analyze_frame_with_gemini(prompt, latest_screen_frame)
+
+            if result != "OK" and result != "":
+                logger.info(f"Workspace Alert: {result}")
+                transcript_builder.append(f"[WORKSPACE BUG]: {result}")
+
+                await agent2.say(result, allow_interruptions=True)
+                agent2.chat_ctx.add_message(role="assistant", content=result)
+
+    proctor_task = None
+    if session_mode != "TUTOR":
+        logger.info("Starting Proctor Sentinel (Strict Mode)")
+        proctor_task = asyncio.create_task(proctor_sentinel())
+    else:
+        logger.info("Tutor Mode: Proctor Sentinel DISABLED")
+
+    workspace_task = asyncio.create_task(workspace_sentinel())
+
+    # ==========================================
+    # 4. INSTANT WAKE-UP (DATA CHANNELS)
+    # ==========================================
+    @ctx.room.on("data_received")
+    def on_data_received(data_packet: rtc.DataPacket):
+        try:
+            payload = json.loads(data_packet.data.decode("utf-8"))
+            if payload.get("event") == "RUN_CODE":
+                logger.info("Candidate clicked RUN! Waking Workspace Sentinel.")
+                asyncio.create_task(workspace_sentinel_immediate())
+        except Exception as e:
+            logger.error(f"Error handling DataChannel packet: {e}")
+
+    async def workspace_sentinel_immediate():
+        prompt = "Look at the code on the screen. The user just clicked run. Identify any bugs concisely. If fine, reply 'Your code looks good!'"
+        result = await analyze_frame_with_gemini(prompt, latest_screen_frame)
+        if result != "OK" and result != "":
+            await agent2.say(result, allow_interruptions=True)
+            agent2.chat_ctx.add_message(role="assistant", content=result)
+
+    # ==========================================
+    # 5. THE HANDBACK (ROOM DISCONNECT)
+    # ==========================================
+    @ctx.room.on("disconnected")
+    def on_disconnected():
+        logger.info(f"Candidate left. Shutting down tasks and sending transcript to Java.")
+        if proctor_task:
+            proctor_task.cancel()
+        workspace_task.cancel()
+
+        final_transcript = "\n".join(transcript_builder)
+        asyncio.create_task(post_transcript_to_java(interview_id, candidate_code, final_transcript))
+
+    async def post_transcript_to_java(i_id, c_code, transcript_text):
+        url = f"{os.getenv('JAVA_BACKEND_URL')}/api/internal/reports/trigger"
+        req_headers = {"X-Internal-Token": os.getenv("INTERNAL_PYTHON_SECRET"), "Content-Type": "application/json"}
+        payload = {
+            "interviewId": i_id,
+            "accessCode": c_code,
+            "transcript": transcript_text,
+            "finalCode": "Captured via AI Vision"
+        }
+        async with aiohttp.ClientSession() as client_session:
+            async with client_session.post(url, headers=req_headers, json=payload) as post_resp:
+                logger.info(f"Java Webhook Response: {post_resp.status}")
+
+if __name__ == "__main__":
+    cli.run_app(WorkerOptions(
+        entrypoint_fnc=entrypoint,
+        prewarm_fnc=lambda proc: proc.userdata.update({"vad": silero.VAD.load()})
+    ))
