@@ -14,7 +14,12 @@ import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.multipart.MultipartFile;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -22,6 +27,8 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 public class WorkspaceService {
+
+    private static final Path LOGO_UPLOAD_DIR = Paths.get("uploads", "workspaces");
 
     private final WorkspaceRepository workspaceRepository;
     private final WorkspaceMemberRepository workspaceMemberRepository;
@@ -62,12 +69,40 @@ public class WorkspaceService {
     }
 
     @Transactional
-    public WorkspaceInfoRes updateWorkspace(UserDetails adminDetails, WorkspaceUpdateReq req) {
+    public WorkspaceInfoRes updateWorkspace(UserDetails adminDetails, String name, MultipartFile logo) {
         User admin = getAuthenticatedAdmin(adminDetails);
         Workspace workspace = getAdminWorkspace(admin);
 
-        if (req.getName() != null && !req.getName().isBlank()) workspace.setName(req.getName());
-        if (req.getLogoUrl() != null) workspace.setLogoUrl(req.getLogoUrl());
+        if (name != null && !name.isBlank()) {
+            workspace.setName(name);
+        }
+
+        if (logo != null && !logo.isEmpty()) {
+            if (logo.getSize() > 7L * 1024 * 1024) {
+                throw new InvalidRequestException("Logo file exceeds max size of 7MB.");
+            }
+
+            String contentType = logo.getContentType();
+            if (contentType == null || !contentType.startsWith("image/")) {
+                throw new InvalidRequestException("Logo must be an image file.");
+            }
+
+            try {
+                Files.createDirectories(LOGO_UPLOAD_DIR);
+
+                String originalName = logo.getOriginalFilename() != null ? logo.getOriginalFilename() : "logo";
+                int dotIndex = originalName.lastIndexOf('.');
+                String extension = dotIndex >= 0 ? originalName.substring(dotIndex) : "";
+
+                String fileName = workspace.getId() + "-" + UUID.randomUUID() + extension;
+                Path destination = LOGO_UPLOAD_DIR.resolve(fileName).normalize();
+                Files.copy(logo.getInputStream(), destination, StandardCopyOption.REPLACE_EXISTING);
+
+                workspace.setLogoUrl("/uploads/workspaces/" + fileName);
+            } catch (Exception e) {
+                throw new InvalidRequestException("Failed to process uploaded logo file.");
+            }
+        }
 
         workspaceRepository.save(workspace);
 

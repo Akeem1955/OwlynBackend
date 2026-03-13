@@ -33,6 +33,12 @@ public class Interview {
     @Column(nullable = false)
     private String title;
 
+    @Column(name = "candidate_name")
+    private String candidateName;
+
+    @Column(name = "candidate_email")
+    private String candidateEmail;
+
     @Column(name = "access_code", length = 6, unique = true, nullable = false)
     private String accessCode;
 

@@ -22,9 +22,18 @@ public class CandidateDTOs {
     public static class ValidateCodeRes {
         private String token; // The Guest JWT
         private String livekitToken;
+        private String candidateName;
+        private String personaName;
         private UUID interviewId;
         private String title;
         private Integer durationMinutes;
+        private Map<String, Boolean> toolsEnabled;
+        private ValidateCodeConfigRes config;
+    }
+
+    @Data
+    @Builder
+    public static class ValidateCodeConfigRes {
         private Map<String, Boolean> toolsEnabled;
     }
 }

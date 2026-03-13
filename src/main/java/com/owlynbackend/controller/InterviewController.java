@@ -49,6 +49,13 @@ public class InterviewController {
         return ResponseEntity.ok(interviewService.getAllWorkspaceInterviews(userDetails));
     }
 
+    @GetMapping("/{id}")
+    public ResponseEntity<InterviewCreatedRes> getWorkspaceInterviewById(
+            @AuthenticationPrincipal UserDetails userDetails,
+            @PathVariable java.util.UUID id) {
+        return ResponseEntity.ok(interviewService.getWorkspaceInterviewById(userDetails, id));
+    }
+
 
 
     // STEP 1: Candidate enters the 6-digit code (Public Endpoint)
@@ -62,6 +69,12 @@ public class InterviewController {
     public ResponseEntity<Map<String, String>> activateInterview(@PathVariable String code) {
         interviewService.startInterviewLockdown(code);
         return ResponseEntity.ok(Map.of("message", "Interview is now ACTIVE. Lockdown initiated."));
+    }
+
+    @PutMapping("/{code}/status/completed")
+    public ResponseEntity<Map<String, String>> completeInterview(@PathVariable String code) {
+        interviewService.completeInterviewByAccessCode(code);
+        return ResponseEntity.ok(Map.of("message", "Interview completion requested. Status will be COMPLETED after report generation."));
     }
 
 

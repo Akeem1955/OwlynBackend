@@ -5,6 +5,7 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.Map;
 import java.util.UUID;
 
 public class PublicSessionDTOs {
@@ -26,7 +27,20 @@ public class PublicSessionDTOs {
         private String token; // The Guest JWT
         private String livekitToken;
         private UUID interviewId;
-        private String accessCode;
-        private String mode; // "PRACTICE" or "TUTOR"
+        private String title;
+        private Integer durationMinutes;
+        private String candidateName;
+        private String personaName;
+        private Map<String, Boolean> toolsEnabled;
+        private PublicSessionConfigRes config;
+        private String mode;
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class PublicSessionConfigRes {
+        private Map<String, Boolean> toolsEnabled;
     }
 }

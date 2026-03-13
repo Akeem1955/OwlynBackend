@@ -20,7 +20,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.security.SecureRandom;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 @Service
@@ -66,6 +69,19 @@ public class InterviewService {
         return code;
     }
 
+    private Map<String, Boolean> normalizeToolsEnabled(Map<String, Boolean> toolsEnabled) {
+        Map<String, Boolean> normalized = new HashMap<>();
+        normalized.put("codeEditor", true);
+        normalized.put("whiteboard", true);
+        normalized.put("notes", true);
+
+        if (toolsEnabled != null) {
+            normalized.putAll(toolsEnabled);
+        }
+
+        return normalized;
+    }
+
     @Transactional
     public InterviewCreatedRes createInterview(UserDetails creatorDetails, CreateInterviewReq req) {
         User creator = getAuthenticatedUser(creatorDetails);
@@ -82,9 +98,11 @@ public class InterviewService {
                 .workspace(workspace)
                 .createdBy(creator)
                 .title(req.getTitle())
+            .candidateName(req.getCandidateName())
+            .candidateEmail(req.getCandidateEmail())
                 .accessCode(accessCode)
                 .durationMinutes(req.getDurationMinutes() != null ? req.getDurationMinutes() : 45)
-                .toolsEnabled(req.getToolsEnabled())
+            .toolsEnabled(normalizeToolsEnabled(req.getToolsEnabled()))
                 .aiInstructions(req.getAiInstructions())
                 .generatedQuestions(req.getGeneratedQuestions()) // The Gemini 3.0 Flash questions!
                 .persona(selectedPersona)
@@ -99,6 +117,7 @@ public class InterviewService {
                 .title(interview.getTitle())
                 .accessCode(interview.getAccessCode())
                 .status(interview.getStatus().name())
+                .toolsEnabled(interview.getToolsEnabled())
                 .build();
     }
 
@@ -114,9 +133,36 @@ public class InterviewService {
                         .title(i.getTitle())
                         .accessCode(i.getAccessCode())
                         .status(i.getStatus().name())
+                .candidateName(i.getCandidateName())
+                .candidateEmail(i.getCandidateEmail())
+                .mode(i.getMode() != null ? i.getMode().name() : null)
                         .build())
                 .collect(Collectors.toList());
     }
+
+        @Transactional(readOnly = true)
+        public InterviewCreatedRes getWorkspaceInterviewById(UserDetails userDetails, UUID interviewId) {
+        User user = getAuthenticatedUser(userDetails);
+        Workspace workspace = getUserWorkspace(user);
+
+        Interview interview = interviewRepository.findById(interviewId)
+            .orElseThrow(() -> new InvalidRequestException("Interview not found."));
+
+        if (!interview.getWorkspace().getId().equals(workspace.getId())) {
+            throw new WorkspaceAccessDeniedException("You do not have access to this interview.");
+        }
+
+        return InterviewCreatedRes.builder()
+            .interviewId(interview.getId())
+            .title(interview.getTitle())
+            .accessCode(interview.getAccessCode())
+            .status(interview.getStatus().name())
+            .candidateName(interview.getCandidateName())
+            .candidateEmail(interview.getCandidateEmail())
+            .mode(interview.getMode() != null ? interview.getMode().name() : null)
+            .toolsEnabled(normalizeToolsEnabled(interview.getToolsEnabled()))
+            .build();
+        }
 
     // Add this to InterviewService.java
 
@@ -124,6 +170,10 @@ public class InterviewService {
 
     @Transactional(readOnly = true)
     public CandidateDTOs.ValidateCodeRes validateAccessCode(String accessCode) {
+        if (accessCode == null || !accessCode.matches("^\\d{6}$")) {
+            throw new InvalidAccessCodeException("Access code must be exactly 6 digits.");
+        }
+
         Interview interview = interviewRepository.findByAccessCode(accessCode);
         if (interview == null || interview.getStatus() != InterviewStatus.UPCOMING) {
             throw new InvalidAccessCodeException("Invalid or expired access code.");
@@ -133,14 +183,20 @@ public class InterviewService {
 
         // NEW: Generate LiveKit Token
         String lkToken = liveKitTokenService.generateCandidateToken(interview.getId().toString(), accessCode);
+        Map<String, Boolean> toolsEnabled = normalizeToolsEnabled(interview.getToolsEnabled());
 
         return CandidateDTOs.ValidateCodeRes.builder()
                 .token(guestToken)
                 .livekitToken(lkToken) // Hand it to frontend!
+            .candidateName(interview.getCandidateName())
+            .personaName(interview.getPersona() != null ? interview.getPersona().getName() : "Owlyn")
                 .interviewId(interview.getId())
                 .title(interview.getTitle())
                 .durationMinutes(interview.getDurationMinutes())
-                .toolsEnabled(interview.getToolsEnabled())
+            .toolsEnabled(toolsEnabled)
+            .config(CandidateDTOs.ValidateCodeConfigRes.builder()
+                .toolsEnabled(toolsEnabled)
+                .build())
                 .build();
     }
 
@@ -155,6 +211,29 @@ public class InterviewService {
         // Lock the room so nobody else can use this code
         interview.setStatus(InterviewStatus.ACTIVE);
         interviewRepository.save(interview);
+    }
+
+    @Transactional
+    public void completeInterviewByAccessCode(String accessCode) {
+        Interview interview = interviewRepository.findByAccessCode(accessCode);
+
+        if (interview == null) {
+            throw new InvalidAccessCodeException("Interview not found for the provided code.");
+        }
+
+        if (interview.getStatus() == InterviewStatus.COMPLETED) {
+            return;
+        }
+    }
+
+    @Transactional
+    public void completeInterviewById(UUID interviewId) {
+        Interview interview = interviewRepository.findById(interviewId)
+                .orElseThrow(() -> new InvalidRequestException("Interview not found."));
+
+        if (interview.getStatus() == InterviewStatus.COMPLETED) {
+            return;
+        }
     }
 
     @Transactional(readOnly = true)

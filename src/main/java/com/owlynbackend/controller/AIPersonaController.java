@@ -4,7 +4,10 @@ package com.owlynbackend.controller;
 
 import com.owlynbackend.internal.dto.PersonaDTOs.CreatePersonaReq;
 import com.owlynbackend.internal.dto.PersonaDTOs.PersonaRes;
+import com.owlynbackend.internal.dto.PersonaDTOs.UpdatePersonaReq;
+import com.owlynbackend.internal.errors.InvalidRequestException;
 import com.owlynbackend.services.AIPersonaService;
+
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -12,6 +15,7 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.userdetails.UserDetails; // Add this import
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
+import tools.jackson.databind.ObjectMapper;
 
 import java.util.List;
 import java.util.Map;
@@ -23,6 +27,7 @@ import java.util.UUID;
 public class AIPersonaController {
 
     private final AIPersonaService aiPersonaService;
+    private final ObjectMapper objectMapper;
 
     // Fetch all personas for the UI Sidebar
     @GetMapping
@@ -39,6 +44,21 @@ public class AIPersonaController {
 
         PersonaRes response = aiPersonaService.createPersona(userDetails, req, file);
         return ResponseEntity.ok(response);
+    }
+
+    @PutMapping(value = "/{id}", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<PersonaRes> updatePersona(
+            @AuthenticationPrincipal UserDetails userDetails,
+            @PathVariable UUID id,
+            @RequestPart("persona") String personaJson,
+            @RequestPart(value = "file", required = false) MultipartFile file) {
+
+        try {
+            UpdatePersonaReq req = objectMapper.readValue(personaJson, UpdatePersonaReq.class);
+            return ResponseEntity.ok(aiPersonaService.updatePersona(userDetails, id, req, file));
+        } catch (Exception e) {
+            throw new InvalidRequestException("Invalid persona payload. Ensure 'persona' is valid JSON.");
+        }
     }
 
 

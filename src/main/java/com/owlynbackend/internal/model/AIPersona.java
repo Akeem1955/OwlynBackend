@@ -48,6 +48,12 @@ public class AIPersona {
     @Column(name = "tone")
     private String tone; // MENTOR, ARCHITECT, INQUISITOR
 
+    @Column(name = "language")
+    private String language;
+
+    @Column(name = "is_adaptive")
+    private Boolean isAdaptive;
+
     // DOMAIN EXPERTISE (Tags)
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "domain_expertise", columnDefinition = "jsonb")

@@ -5,6 +5,8 @@ import com.owlynbackend.internal.errors.*;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.MultipartException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
@@ -85,6 +87,36 @@ public class GlobalExceptionHandler {
         log.warn("Handling InvalidRequestException: {}", ex.getMessage());
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .body(Map.of("error", ex.getMessage())); // Returns 400
+    }
+
+        @ExceptionHandler(ReportNotReadyException.class)
+        public ResponseEntity<Map<String, String>> handleReportNotReady(ReportNotReadyException ex) {
+        log.warn("Handling ReportNotReadyException: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+            .body(Map.of(
+                "code", "REPORT_NOT_READY",
+                "message", ex.getMessage(),
+                "error", ex.getMessage()
+            ));
+        }
+
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<Map<String, String>> handleMaxUploadSizeExceeded(MaxUploadSizeExceededException ex) {
+        log.warn("Handling MaxUploadSizeExceededException: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
+                .body(Map.of("error", "File size exceeds the maximum allowed limit of 7MB."));
+    }
+
+    @ExceptionHandler(MultipartException.class)
+    public ResponseEntity<Map<String, String>> handleMultipartException(MultipartException ex) {
+        log.warn("Handling MultipartException: {}", ex.getMessage());
+        String message = ex.getMessage() != null ? ex.getMessage().toLowerCase() : "";
+        if (message.contains("maximum upload size") || message.contains("maxuploadsizeexceeded")) {
+            return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
+                    .body(Map.of("error", "File size exceeds the maximum allowed limit of 7MB."));
+        }
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(Map.of("error", "Invalid multipart request."));
     }
 
     @ExceptionHandler(WorkspaceMemberNotFoundException.class)

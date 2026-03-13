@@ -22,6 +22,10 @@ public class InterviewConfigDTOs {
         private String title;
         private String accessCode; // The Golden Ticket (e.g., "839201")
         private String status;
+        private String candidateName;
+        private String candidateEmail;
+        private String mode;
+        private Map<String, Boolean> toolsEnabled;
     }
 
     // Inside InterviewConfigDTOs.java
@@ -29,6 +33,8 @@ public class InterviewConfigDTOs {
     @Data
     public static class CreateInterviewReq {
         private String title;
+        private String candidateName;
+        private String candidateEmail;
         private Integer durationMinutes;
         private Map<String, Boolean> toolsEnabled;
 

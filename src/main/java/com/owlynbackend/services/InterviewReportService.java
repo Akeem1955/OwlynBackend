@@ -3,6 +3,7 @@ package com.owlynbackend.services;
 import com.owlynbackend.internal.dto.ReportDTOs.AddFeedbackReq;
 import com.owlynbackend.internal.dto.ReportDTOs.ReportRes;
 import com.owlynbackend.internal.errors.InvalidRequestException;
+import com.owlynbackend.internal.errors.ReportNotReadyException;
 import com.owlynbackend.internal.errors.UserNotFoundException;
 import com.owlynbackend.internal.errors.WorkspaceAccessDeniedException;
 import com.owlynbackend.internal.model.Interview;
@@ -56,7 +57,7 @@ public class InterviewReportService {
         validateWorkspaceAccess(user, interview);
 
         InterviewReport report = reportRepository.findByInterviewId(interviewId)
-                .orElseThrow(() -> new InvalidRequestException("Report has not been generated yet."));
+            .orElseThrow(() -> new ReportNotReadyException("Report not ready yet."));
 
         return mapToRes(report);
     }
@@ -70,7 +71,7 @@ public class InterviewReportService {
         validateWorkspaceAccess(user, interview);
 
         InterviewReport report = reportRepository.findByInterviewId(interviewId)
-                .orElseThrow(() -> new InvalidRequestException("Report has not been generated yet."));
+            .orElseThrow(() -> new ReportNotReadyException("Report not ready yet."));
 
         // Save notes and safely parse the HIRE/DECLINE enum
         if (req.getHumanFeedback() != null) {

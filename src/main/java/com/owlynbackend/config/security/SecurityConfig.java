@@ -46,6 +46,8 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.POST, "/api/auth/verify-login").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/interviews/validate-code").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/health").permitAll()
+                        .requestMatchers("/api/internal/**").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/uploads/**").permitAll()
                         .requestMatchers("/api/public/**").permitAll()
                         // Phase 3 & 5: Electron WebSocket Stream Endpoint
                         .requestMatchers("/stream/**").permitAll()

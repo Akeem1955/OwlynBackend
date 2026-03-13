@@ -4,6 +4,7 @@ package com.owlynbackend.services;
 
 import com.owlynbackend.internal.dto.PersonaDTOs.CreatePersonaReq;
 import com.owlynbackend.internal.dto.PersonaDTOs.PersonaRes;
+import com.owlynbackend.internal.dto.PersonaDTOs.UpdatePersonaReq;
 import com.owlynbackend.internal.errors.InvalidRequestException;
 import com.owlynbackend.internal.errors.UserNotFoundException;
 import com.owlynbackend.internal.model.AIPersona;
@@ -86,6 +87,48 @@ public class AIPersonaService {
                 .collect(Collectors.toList());
     }
 
+    @Transactional
+    public PersonaRes updatePersona(UserDetails userDetails, UUID personaId, UpdatePersonaReq req, MultipartFile file) {
+        User user = getAuthenticatedUser(userDetails);
+        Workspace workspace = getUserWorkspace(user);
+
+        AIPersona persona = aiPersonaRepository.findByIdAndWorkspaceId(personaId, workspace.getId())
+                .orElseThrow(() -> new InvalidRequestException("Persona not found or you do not have permission to update it."));
+
+        if (req.getName() != null && !req.getName().isBlank()) {
+            persona.setName(req.getName());
+        }
+        if (req.getTone() != null) {
+            persona.setTone(req.getTone());
+        }
+        if (req.getEmpathyScore() != null) {
+            persona.setEmpathyScore(req.getEmpathyScore());
+        }
+        if (req.getAnalyticalDepth() != null) {
+            persona.setAnalyticalDepth(req.getAnalyticalDepth());
+        }
+        if (req.getDirectnessScore() != null) {
+            persona.setDirectnessScore(req.getDirectnessScore());
+        }
+        if (req.getLanguage() != null) {
+            persona.setLanguage(req.getLanguage());
+        }
+        if (req.getIsAdaptive() != null) {
+            persona.setIsAdaptive(req.getIsAdaptive());
+        }
+        if (req.getDomainExpertise() != null) {
+            persona.setDomainExpertise(req.getDomainExpertise());
+        }
+
+        if (file != null && !file.isEmpty()) {
+            String extractedText = documentExtractionService.extractTextFromFile(file);
+            persona.setKnowledgeBaseText(extractedText);
+        }
+
+        persona = aiPersonaRepository.save(persona);
+        return mapToRes(persona);
+    }
+
     private PersonaRes mapToRes(AIPersona p) {
         return PersonaRes.builder()
                 .id(p.getId())
@@ -95,6 +138,8 @@ public class AIPersonaService {
                 .analyticalDepth(p.getAnalyticalDepth())
                 .directnessScore(p.getDirectnessScore())
                 .tone(p.getTone())
+                .language(p.getLanguage())
+                .isAdaptive(p.getIsAdaptive())
                 .domainExpertise(p.getDomainExpertise())
                 .hasKnowledgeBase(p.getKnowledgeBaseText() != null && !p.getKnowledgeBaseText().isBlank())
                 .build();

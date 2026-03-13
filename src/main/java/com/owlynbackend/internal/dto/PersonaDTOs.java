@@ -26,6 +26,20 @@ public class PersonaDTOs {
     }
 
     @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class UpdatePersonaReq {
+        private String name;
+        private String tone;
+        private Integer empathyScore;
+        private Integer analyticalDepth;
+        private Integer directnessScore;
+        private String language;
+        private Boolean isAdaptive;
+        private List<String> domainExpertise;
+    }
+
+    @Data
     @Builder
     public static class PersonaRes {
         private UUID id;
@@ -35,6 +49,8 @@ public class PersonaDTOs {
         private Integer analyticalDepth;
         private Integer directnessScore;
         private String tone;
+        private String language;
+        private Boolean isAdaptive;
         private List<String> domainExpertise;
         private boolean hasKnowledgeBase; // Frontend uses this to show a "File Attached" icon
     }

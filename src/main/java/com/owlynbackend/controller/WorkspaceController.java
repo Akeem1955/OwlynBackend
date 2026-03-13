@@ -3,10 +3,12 @@ package com.owlynbackend.controller;
 import com.owlynbackend.internal.dto.WorkspaceDTOs.*;
 import com.owlynbackend.services.WorkspaceService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
 import java.util.Map;
@@ -24,11 +26,12 @@ public class WorkspaceController {
         return ResponseEntity.ok(workspaceService.getWorkspaceDetails(adminDetails));
     }
 
-    @PutMapping
+    @PutMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<WorkspaceInfoRes> updateWorkspace(
             @AuthenticationPrincipal UserDetails adminDetails,
-            @RequestBody WorkspaceUpdateReq req) {
-        return ResponseEntity.ok(workspaceService.updateWorkspace(adminDetails, req));
+            @RequestPart(value = "name", required = false) String name,
+            @RequestPart(value = "logo", required = false) MultipartFile logo) {
+        return ResponseEntity.ok(workspaceService.updateWorkspace(adminDetails, name, logo));
     }
 
     @PostMapping("/invite")

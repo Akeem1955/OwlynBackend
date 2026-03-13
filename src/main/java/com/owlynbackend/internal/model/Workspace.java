@@ -21,7 +21,7 @@ public class Workspace {
     @Column(nullable = false)
     private String name;
 
-    @Column(name = "logo_url")
+    @Column(name = "logo_url", columnDefinition = "TEXT")
     private String logoUrl;
 
     @ManyToOne(fetch = FetchType.LAZY)

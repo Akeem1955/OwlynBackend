@@ -3,7 +3,9 @@ package com.owlynbackend.services;
 import com.owlynbackend.config.security.JwtManager;
 import com.owlynbackend.internal.dto.InterviewDTOs.GenerateQuestionsReq;
 import com.owlynbackend.internal.dto.InterviewDTOs.GenerateQuestionsRes;
+import com.owlynbackend.internal.errors.InvalidRequestException;
 import com.owlynbackend.internal.dto.PublicSessionDTOs.GeneratePracticeReq;
+import com.owlynbackend.internal.dto.PublicSessionDTOs.PublicSessionConfigRes;
 import com.owlynbackend.internal.dto.PublicSessionDTOs.PublicSessionRes;
 import com.owlynbackend.internal.model.Interview;
 import com.owlynbackend.internal.model.User;
@@ -83,10 +85,34 @@ public class PublicSessionService {
         return code;
     }
 
+        private Map<String, Boolean> normalizeToolsEnabled(Map<String, Boolean> toolsEnabled) {
+                java.util.Map<String, Boolean> normalized = new java.util.HashMap<>();
+                normalized.put("codeEditor", true);
+                normalized.put("whiteboard", true);
+                normalized.put("notes", true);
+
+                if (toolsEnabled != null) {
+                        normalized.putAll(toolsEnabled);
+                }
+
+                return normalized;
+        }
+
     @Transactional
     public PublicSessionRes createPracticeSession(GeneratePracticeReq req) {
+                if (req == null || req.getTopic() == null || req.getTopic().isBlank()) {
+                        throw new InvalidRequestException("topic is required for practice session");
+                }
+                if (req.getDifficulty() == null || req.getDifficulty().isBlank()) {
+                        throw new InvalidRequestException("difficulty is required for practice session");
+                }
+                if (req.getDurationMinutes() != null && req.getDurationMinutes() <= 0) {
+                        throw new InvalidRequestException("durationMinutes must be greater than 0");
+                }
+
         Workspace systemWorkspace = getOrCreateSystemWorkspace();
         String accessCode = generateUniqueAccessCode();
+                Map<String, Boolean> toolsEnabled = normalizeToolsEnabled(Map.of("codeEditor", true, "whiteboard", true, "notes", true));
 
         // 1. Call Agent 1 to auto-generate the mock questions!
         GenerateQuestionsReq aiReq = new GenerateQuestionsReq(
@@ -103,7 +129,7 @@ public class PublicSessionService {
                 .title("Practice: " + req.getTopic())
                 .accessCode(accessCode)
                 .durationMinutes(req.getDurationMinutes() != null ? req.getDurationMinutes() : 30)
-                .toolsEnabled(Map.of("codeEditor", true, "whiteboard", true))
+                .toolsEnabled(toolsEnabled)
                 .aiInstructions("Strict FAANG Mock Interviewer")
                 .generatedQuestions(aiRes.getDraftedQuestions())
                 .mode(InterviewMode.PRACTICE)
@@ -122,7 +148,12 @@ public class PublicSessionService {
                 .token(token)
                 .livekitToken(lkToken)
                 .interviewId(interview.getId())
-                .accessCode(accessCode)
+                .title(interview.getTitle())
+                .durationMinutes(interview.getDurationMinutes())
+                .candidateName("Guest Candidate")
+                .personaName("Owlyn")
+                .toolsEnabled(toolsEnabled)
+                .config(PublicSessionConfigRes.builder().toolsEnabled(toolsEnabled).build())
                 .mode(InterviewMode.PRACTICE.name())
                 .build();
     }
@@ -131,6 +162,7 @@ public class PublicSessionService {
     public PublicSessionRes createTutorSession() {
         Workspace systemWorkspace = getOrCreateSystemWorkspace();
         String accessCode = generateUniqueAccessCode();
+                Map<String, Boolean> toolsEnabled = normalizeToolsEnabled(Map.of("codeEditor", false, "whiteboard", false, "notes", false));
 
         // 1. Tutor Mode needs NO auto-generated questions.
         Interview interview = Interview.builder()
@@ -139,7 +171,7 @@ public class PublicSessionService {
                 .title("Desktop AI Tutor")
                 .accessCode(accessCode)
                 .durationMinutes(60)
-                .toolsEnabled(Map.of("screenShare", true))
+                .toolsEnabled(toolsEnabled)
                 .aiInstructions("You are a friendly, patient Desktop AI Tutor. Guide the user step-by-step.")
                 .generatedQuestions("None. Answer the user's questions based on what is on their screen.")
                 .mode(InterviewMode.TUTOR)
@@ -155,7 +187,12 @@ public class PublicSessionService {
                 .token(token)
                 .livekitToken(lkToken)
                 .interviewId(interview.getId())
-                .accessCode(accessCode)
+                .title(interview.getTitle())
+                .durationMinutes(interview.getDurationMinutes())
+                .candidateName("Guest Candidate")
+                .personaName("Owlyn")
+                .toolsEnabled(toolsEnabled)
+                .config(PublicSessionConfigRes.builder().toolsEnabled(toolsEnabled).build())
                 .mode(InterviewMode.TUTOR.name())
                 .build();
     }
