@@ -67,6 +67,8 @@ public class AIPersonaService {
                 .analyticalDepth(req.getAnalyticalDepth())
                 .directnessScore(req.getDirectnessScore())
                 .tone(req.getTone())
+            .language(req.getLanguage() != null && !req.getLanguage().isBlank() ? req.getLanguage() : "English")
+            .isAdaptive(req.getIsAdaptive() != null ? req.getIsAdaptive() : Boolean.TRUE)
                 .domainExpertise(req.getDomainExpertise())
                 .knowledgeBaseText(extractedText) // The Massive Context Hack!
                 .build();

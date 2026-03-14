@@ -22,6 +22,8 @@ public class PersonaDTOs {
         private Integer analyticalDepth;
         private Integer directnessScore;
         private String tone;
+        private String language;
+        private Boolean isAdaptive;
         private List<String> domainExpertise;
     }
 

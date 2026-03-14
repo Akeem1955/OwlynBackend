@@ -77,6 +77,18 @@ public class InterviewController {
         return ResponseEntity.ok(Map.of("message", "Interview completion requested. Status will be COMPLETED after report generation."));
     }
 
+    @PostMapping("/{code}/session-ended")
+    public ResponseEntity<Map<String, String>> notifySessionEnded(
+            @PathVariable String code,
+            @RequestBody(required = false) Map<String, String> payload) {
+        interviewService.notifySessionEnded(code);
+        String reason = payload != null && payload.get("reason") != null ? payload.get("reason") : "SESSION_ENDED";
+        return ResponseEntity.ok(Map.of(
+                "message", "Session end notice received.",
+                "reason", reason
+        ));
+    }
+
 
 // Inside InterviewController.java, add this GET mapping:
 

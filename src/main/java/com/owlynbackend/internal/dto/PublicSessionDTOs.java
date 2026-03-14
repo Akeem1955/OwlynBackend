@@ -17,6 +17,7 @@ public class PublicSessionDTOs {
         private String topic; // e.g., "System Design - Microservices"
         private String difficulty; // e.g., "Hard"
         private Integer durationMinutes;
+        private String language;
     }
 
     @Data

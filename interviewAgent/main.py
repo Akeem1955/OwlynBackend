@@ -4,6 +4,7 @@ import json
 import hashlib
 import logging
 import aiohttp
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 from PIL import Image
 
@@ -78,11 +79,20 @@ async def entrypoint(ctx: JobContext):
 
     # This is the exact plugin from the LiveKit documentation!
     # It bypasses STT/TTS and streams native audio directly to Google.
-    realtime_model = google.realtime.RealtimeModel(
-        model="gemini-2.5-flash-native-audio-preview-12-2025",  # Google's official Live API model
-        voice="Puck",
-        temperature=0.7,
-    )
+    realtime_model_kwargs = {
+        "model": "gemini-2.5-flash-native-audio-preview-12-2025",
+        "voice": "Puck",
+        "temperature": 0.7,
+        "context_window_compression": types.ContextWindowCompressionConfig(
+            sliding_window=types.SlidingWindow(),
+        ),
+        "session_resumption": types.SessionResumptionConfig(),
+    }
+
+    if session_mode == "TUTOR":
+        realtime_model_kwargs["tools"] = [{"google_search": {}}]
+
+    realtime_model = google.realtime.RealtimeModel(**realtime_model_kwargs)
 
     # AgentSession is built specifically for RealtimeModels, NOT pipelines!
     agent_session = AgentSession(
@@ -135,9 +145,14 @@ async def entrypoint(ctx: JobContext):
     logger.info("Gemini Live session started with configured system prompt and function tools.")
 
     try:
-        await agent_session.generate_reply(
-            instructions="Start the interview now. Give a brief greeting, confirm you are the interviewer, and ask the first interview question immediately."
-        )
+        if session_mode == "TUTOR":
+            await agent_session.generate_reply(
+                instructions="Greet briefly as Owlyn Assistant, confirm you can see the shared screen, and ask what coding/email/browsing task the user wants help with first."
+            )
+        else:
+            await agent_session.generate_reply(
+                instructions="Start the interview now. Give a brief greeting, confirm you are the interviewer, and ask the first interview question immediately."
+            )
     except Exception as e:
         logger.warning(f"Initial generate_reply failed; continuing with normal turn handling. error={e}")
 
@@ -147,6 +162,25 @@ async def entrypoint(ctx: JobContext):
             return
         transcript_builder.append(f"[{role_label}]: {clean_text}")
         logger.info(f"TRANSCRIPT [{role_label}]: {clean_text}")
+
+        speaker = "candidate" if role_label == "CANDIDATE" else "ai"
+        asyncio.create_task(publish_transcript_event(speaker, clean_text))
+
+    async def publish_transcript_event(speaker: str, text: str):
+        payload = {
+            "type": "transcript",
+            "speaker": speaker,
+            "text": text,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "id": f"{speaker}-{int(asyncio.get_running_loop().time() * 1000)}",
+        }
+        try:
+            await ctx.room.local_participant.publish_data(
+                json.dumps(payload).encode("utf-8"),
+                reliable=True,
+            )
+        except Exception as e:
+            logger.warning(f"Failed publishing transcript event to LiveKit: {e}")
 
     @agent_session.on("function_tools_executed")
     def on_function_tools_executed(event):
@@ -255,7 +289,13 @@ async def entrypoint(ctx: JobContext):
             return "OK"
 
     async def proctor_sentinel():
-        prompt = "Look at this webcam feed. Is the candidate holding a phone or looking away? If yes, reply with a short warning. If no, reply 'OK'."
+        prompt = (
+            "Analyze this webcam frame for interview-integrity activity. "
+            "Detect and report concise warnings for activities such as: looking away repeatedly, using/holding a phone, eating/drinking, smoking/vaping, "
+            "covering face, talking to another person, leaving frame, multiple people, suspicious gestures/devices, or any non-serious behavior. "
+            "If no issue is visible, reply exactly 'OK'. "
+            "If issue exists, reply with one short warning sentence only."
+        )
         while not shutdown_event.is_set():
             await asyncio.sleep(10)
             if shutdown_event.is_set():
@@ -275,8 +315,16 @@ async def entrypoint(ctx: JobContext):
                 payload = json.dumps({"type": "PROCTOR_WARNING", "message": result}).encode("utf-8")
                 await ctx.room.local_participant.publish_data(payload, reliable=True)
 
+                activity_payload = json.dumps(
+                    {"type": "PROCTOR_ACTIVITY", "message": result}
+                ).encode("utf-8")
+                await ctx.room.local_participant.publish_data(activity_payload, reliable=True)
+
     async def workspace_sentinel():
-        prompt = "Look at this code editor. Is there a syntax error or logic bug? If yes, reply with a short hint. If no, reply 'OK'."
+        if session_mode == "TUTOR":
+            prompt = "Look at this desktop screen. If there is a coding issue, email-writing issue, browsing/research opportunity, or workflow task you can help with, reply with one concise actionable assistant tip. If nothing actionable is visible, reply 'OK'."
+        else:
+            prompt = "Look at this code editor. Is there a syntax error or logic bug? If yes, reply with a short hint. If no, reply 'OK'."
         while not shutdown_event.is_set():
             await asyncio.sleep(15)
             if shutdown_event.is_set():
@@ -287,11 +335,22 @@ async def entrypoint(ctx: JobContext):
                 logger.info(f"Workspace Alert: {result}")
                 transcript_builder.append(f"[WORKSPACE BUG]: {result}")
 
+                workspace_payload = json.dumps(
+                    {"type": "WORKSPACE_ALERT", "message": result}
+                ).encode("utf-8")
+                await ctx.room.local_participant.publish_data(workspace_payload, reliable=True)
+
                 # Inject alert into the Gemini Live API via generate_reply
-                await notify_live_agent(
-                    "WORKSPACE_ALERT",
-                    f"WORKSPACE ALERT: {result}. Give a concise interview-style hint and stay in interviewer role."
-                )
+                if session_mode == "TUTOR":
+                    await notify_live_agent(
+                        "WORKSPACE_ALERT",
+                        f"ASSISTANT SCREEN INSIGHT: {result}. Respond as a practical desktop assistant and suggest the next concrete action."
+                    )
+                else:
+                    await notify_live_agent(
+                        "WORKSPACE_ALERT",
+                        f"WORKSPACE ALERT: {result}. Give a concise interview-style hint and stay in interviewer role."
+                    )
 
     proctor_task = None
     if session_mode != "TUTOR":
@@ -320,19 +379,34 @@ async def entrypoint(ctx: JobContext):
             return
 
         if latest_screen_frame is None:
-            await notify_live_agent(
-                "RUN_CODE_WITHOUT_SCREEN",
-                "The candidate clicked Run Code, but screen share is not available yet. Ask them to ensure full screen sharing is enabled, then click Run Code again."
-            )
+            if session_mode == "TUTOR":
+                await notify_live_agent(
+                    "RUN_CODE_WITHOUT_SCREEN",
+                    "Screen share is not available yet. Ask the user to enable full screen sharing so you can assist with on-screen tasks."
+                )
+            else:
+                await notify_live_agent(
+                    "RUN_CODE_WITHOUT_SCREEN",
+                    "The candidate clicked Run Code, but screen share is not available yet. Ask them to ensure full screen sharing is enabled, then click Run Code again."
+                )
             return
 
-        prompt = "Look at the code on the screen. The user just clicked run. Identify any bugs concisely. If fine, reply 'Your code looks good!'"
+        if session_mode == "TUTOR":
+            prompt = "Look at the current screen and provide one concise assistant recommendation for coding/email/browsing/productivity. If nothing actionable is present, reply 'OK'."
+        else:
+            prompt = "Look at the code on the screen. The user just clicked run. Identify any bugs concisely. If fine, reply 'Your code looks good!'"
         result = await analyze_frame_with_gemini(prompt, latest_screen_frame)
         if result != "OK" and result != "":
-            await notify_live_agent(
-                "WORKSPACE_ALERT_IMMEDIATE",
-                f"WORKSPACE ALERT: {result}. Give a concise interview-style hint and stay in interviewer role."
-            )
+            if session_mode == "TUTOR":
+                await notify_live_agent(
+                    "WORKSPACE_ALERT_IMMEDIATE",
+                    f"ASSISTANT SCREEN INSIGHT: {result}. Reply as an assistant with direct, actionable help."
+                )
+            else:
+                await notify_live_agent(
+                    "WORKSPACE_ALERT_IMMEDIATE",
+                    f"WORKSPACE ALERT: {result}. Give a concise interview-style hint and stay in interviewer role."
+                )
 
     async def finalize_interview(reason: str):
         nonlocal has_finalized
@@ -357,7 +431,11 @@ async def entrypoint(ctx: JobContext):
 
         report_triggered = await post_transcript_to_java(interview_id, candidate_code, final_transcript)
         if report_triggered:
-            logger.info("Finalize complete: report trigger accepted by backend; completion will be set after report save.")
+            completed = await mark_interview_completed_in_java(interview_id)
+            if completed:
+                logger.info("Finalize complete: report trigger accepted and completion fallback requested.")
+            else:
+                logger.error("Finalize partial: report trigger accepted but completion fallback request failed.")
         else:
             logger.error("Finalize incomplete: report trigger failed; interview will not be marked completed without a report.")
 
@@ -393,6 +471,19 @@ async def entrypoint(ctx: JobContext):
                     return 200 <= post_resp.status < 300
         except Exception as e:
             logger.error(f"Failed posting transcript to Java: {e}")
+            return False
+
+    async def mark_interview_completed_in_java(i_id: str) -> bool:
+        url = f"{os.getenv('JAVA_BACKEND_URL')}/api/internal/reports/interviews/{i_id}/status/completed"
+        req_headers = {"X-Internal-Token": os.getenv("INTERNAL_PYTHON_SECRET")}
+        try:
+            async with aiohttp.ClientSession() as client_session:
+                async with client_session.put(url, headers=req_headers) as put_resp:
+                    response_text = await put_resp.text()
+                    logger.info(f"Mark completed response: {put_resp.status}; body={response_text[:300]}")
+                    return 200 <= put_resp.status < 300
+        except Exception as e:
+            logger.error(f"Failed requesting interview completion fallback: {e}")
             return False
 
 

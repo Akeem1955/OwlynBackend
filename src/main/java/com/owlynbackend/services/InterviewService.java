@@ -30,6 +30,8 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class InterviewService {
 
+    private static final int MAX_SESSION_DURATION_MINUTES = 30;
+
     private final InterviewRepository interviewRepository;
     private final JwtManager jwtManager;
     private final WorkspaceMemberRepository workspaceMemberRepository;
@@ -88,6 +90,15 @@ public class InterviewService {
         Workspace workspace = getUserWorkspace(creator);
         String accessCode = generateUniqueAccessCode();
 
+        if (req.getDurationMinutes() != null) {
+            if (req.getDurationMinutes() <= 0) {
+                throw new InvalidRequestException("durationMinutes must be greater than 0");
+            }
+            if (req.getDurationMinutes() > MAX_SESSION_DURATION_MINUTES) {
+                throw new InvalidRequestException("durationMinutes cannot exceed 30");
+            }
+        }
+
         AIPersona selectedPersona = null;
         if (req.getPersonaId() != null) {
             selectedPersona = aiPersonaRepository.findById(req.getPersonaId())
@@ -101,7 +112,7 @@ public class InterviewService {
             .candidateName(req.getCandidateName())
             .candidateEmail(req.getCandidateEmail())
                 .accessCode(accessCode)
-                .durationMinutes(req.getDurationMinutes() != null ? req.getDurationMinutes() : 45)
+                .durationMinutes(req.getDurationMinutes() != null ? req.getDurationMinutes() : MAX_SESSION_DURATION_MINUTES)
             .toolsEnabled(normalizeToolsEnabled(req.getToolsEnabled()))
                 .aiInstructions(req.getAiInstructions())
                 .generatedQuestions(req.getGeneratedQuestions()) // The Gemini 3.0 Flash questions!
@@ -224,6 +235,9 @@ public class InterviewService {
         if (interview.getStatus() == InterviewStatus.COMPLETED) {
             return;
         }
+
+        interview.setStatus(InterviewStatus.COMPLETED);
+        interviewRepository.save(interview);
     }
 
     @Transactional
@@ -234,6 +248,14 @@ public class InterviewService {
         if (interview.getStatus() == InterviewStatus.COMPLETED) {
             return;
         }
+
+        interview.setStatus(InterviewStatus.COMPLETED);
+        interviewRepository.save(interview);
+    }
+
+    @Transactional
+    public void notifySessionEnded(String accessCode) {
+        completeInterviewByAccessCode(accessCode);
     }
 
     @Transactional(readOnly = true)
