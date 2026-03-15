@@ -95,6 +95,7 @@ public class InterviewReportService {
                 .reportId(report.getId())
                 .interviewId(report.getInterview().getId())
                 .candidateEmail(report.getCandidateEmail())
+                .candidateName(report.getCandidateName())
                 .score(report.getScore())
                 .behavioralNotes(report.getBehavioralNotes())
                 .codeOutput(report.getCodeOutput())

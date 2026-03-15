@@ -82,7 +82,7 @@ public class InternalReportController {
     @PutMapping("/interviews/{interviewId}/status/completed")
     public ResponseEntity<?> markInterviewCompleted(
             @RequestHeader("X-Internal-Token") String secretToken,
-            @PathVariable String interviewId) {
+            @PathVariable("interviewId") String interviewId) {
 
         if (!expectedSecret.equals(secretToken)) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Invalid Internal Token");
@@ -108,7 +108,7 @@ public class InternalReportController {
     @GetMapping("/interviews/{interviewId}/config")
     public ResponseEntity<?> getInterviewConfig(
             @RequestHeader("X-Internal-Token") String secretToken,
-            @PathVariable String interviewId) {
+            @PathVariable("interviewId") String interviewId) {
 
         if (!expectedSecret.equals(secretToken)) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Invalid Internal Token");
@@ -162,6 +162,7 @@ Greet briefly as Owlyn Assistant and ask what the user wants help with right now
             String interviewerName = "Owlyn";
             String interviewerTone = "Authoritative, blunt, deeply professional, and emotionally detached";
             String interviewLanguage = resolvePracticeLanguage(interview.getAiInstructions());
+            boolean adaptiveLanguageMode = false;
             String roleAssessed = (interview.getTitle() != null && !interview.getTitle().isBlank())
                     ? interview.getTitle()
                     : "Python Backend Developer (Concepts: ORM, Concurrency, APIs, Data Structures, Microservices, Testing, Docker/Deployment)";
@@ -180,7 +181,31 @@ Greet briefly as Owlyn Assistant and ask what the user wants help with right now
                 interviewLanguage = (interview.getPersona().getLanguage() != null && !interview.getPersona().getLanguage().isBlank())
                         ? interview.getPersona().getLanguage()
                         : interviewLanguage;
+                adaptiveLanguageMode = Boolean.TRUE.equals(interview.getPersona().getIsAdaptive());
             }
+
+                String languagePolicyBlock = adaptiveLanguageMode
+                    ? """
+        <language_mode>
+        Adaptive Mode: ENABLED
+
+        IF the candidate speaks in a different language than __INTERVIEW_LANGUAGE__,
+        THEN switch your spoken language to match the candidate's current language and continue the interview naturally.
+
+        IF the candidate switches language again,
+        THEN adapt again and continue without friction.
+
+        Keep interview quality and strictness unchanged while adapting language.
+        </language_mode>
+        """
+                    : """
+        <language_mode>
+        Adaptive Mode: DISABLED
+
+        IF the candidate speaks in a language different from __INTERVIEW_LANGUAGE__,
+        THEN immediately redirect them to respond in __INTERVIEW_LANGUAGE__ and continue strictly in __INTERVIEW_LANGUAGE__.
+        </language_mode>
+        """;
 
                         String promptTemplate = """
 <system_instruction>
@@ -229,7 +254,7 @@ Tone Analysis:
 Role Assessed: __ROLE_ASSESSED__
 Language: Strictly __INTERVIEW_LANGUAGE__
 
-If the candidate speaks another language, immediately redirect them back to __INTERVIEW_LANGUAGE__.
+__LANGUAGE_POLICY__
 
 Format Rules:
 - Ask exactly ONE question at a time.
@@ -424,7 +449,8 @@ Do not break character.
                     .replace("__DURATION_MINUTES__", String.valueOf(durationMinutes))
                     .replace("__ROLE_ASSESSED__", roleAssessed)
                     .replace("__INTERVIEWER_TONE__", interviewerTone)
-                    .replace("__INTERVIEW_LANGUAGE__", interviewLanguage);
+                    .replace("__INTERVIEW_LANGUAGE__", interviewLanguage)
+                    .replace("__LANGUAGE_POLICY__", languagePolicyBlock.trim());
 
             if (interview.getPersona() != null) {
                 String personaKnowledge = interview.getPersona().getKnowledgeBaseText() != null

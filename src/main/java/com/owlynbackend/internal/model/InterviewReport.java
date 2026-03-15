@@ -27,6 +27,9 @@ public class InterviewReport {
     @Column(name = "candidate_email", nullable = false)
     private String candidateEmail;
 
+    @Column(name = "candidate_name")
+    private String candidateName;
+
     private Integer score;
 
     @Column(name = "behavioral_notes", columnDefinition = "TEXT")
@@ -48,5 +51,6 @@ public class InterviewReport {
 
     @Enumerated(EnumType.STRING)
     @Column(name = "final_decision", nullable = false)
+    @Builder.Default
     private FinalDecision finalDecision = FinalDecision.PENDING;
 }

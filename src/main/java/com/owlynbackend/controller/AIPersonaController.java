@@ -49,7 +49,7 @@ public class AIPersonaController {
     @PutMapping(value = "/{id}", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<PersonaRes> updatePersona(
             @AuthenticationPrincipal UserDetails userDetails,
-            @PathVariable UUID id,
+            @PathVariable("id") UUID id,
             @RequestPart("persona") String personaJson,
             @RequestPart(value = "file", required = false) MultipartFile file) {
 
@@ -68,7 +68,7 @@ public class AIPersonaController {
     @DeleteMapping("/{id}")
     public ResponseEntity<Map<String, String>> deletePersona(
             @AuthenticationPrincipal UserDetails userDetails,
-            @PathVariable UUID id) {
+            @PathVariable("id") UUID id) {
 
         aiPersonaService.deletePersona(userDetails, id);
         return ResponseEntity.ok(Map.of("message", "Persona successfully deleted."));

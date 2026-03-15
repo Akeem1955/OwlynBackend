@@ -50,7 +50,7 @@ public class WorkspaceController {
     @DeleteMapping("/members/{userId}")
     public ResponseEntity<Map<String, String>> removeMember(
             @AuthenticationPrincipal UserDetails adminDetails,
-            @PathVariable UUID userId) {
+            @PathVariable("userId") UUID userId) {
         workspaceService.removeMember(adminDetails, userId);
         return ResponseEntity.ok(Map.of("message", "Member successfully removed."));
     }

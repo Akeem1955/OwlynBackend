@@ -23,7 +23,8 @@ public class ReportDTOs {
     public static class ReportRes {
         private UUID reportId;
         private UUID interviewId;
-        private String candidateEmail; // This holds the 6-digit access code for ghost candidates
+        private String candidateEmail;
+        private String candidateName;
         private Integer score;
         private String behavioralNotes;
         private String codeOutput;

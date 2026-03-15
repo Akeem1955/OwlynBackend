@@ -89,9 +89,6 @@ async def entrypoint(ctx: JobContext):
         "session_resumption": types.SessionResumptionConfig(),
     }
 
-    if session_mode == "TUTOR":
-        realtime_model_kwargs["tools"] = [{"google_search": {}}]
-
     realtime_model = google.realtime.RealtimeModel(**realtime_model_kwargs)
 
     # AgentSession is built specifically for RealtimeModels, NOT pipelines!
@@ -137,24 +134,17 @@ async def entrypoint(ctx: JobContext):
         logger.warning(f"Tool called: end_interview_session(reason={reason})")
         return "Interview end signal dispatched."
 
+    # Build tools list: Tutor mode gets Google Search grounding
+    agent_tools = [end_interview_session]
+    if session_mode == "TUTOR":
+        agent_tools.append(google.tools.GoogleSearch())
+
     await agent_session.start(
         room=ctx.room,
-        agent=Agent(instructions=agent_instructions, tools=[end_interview_session]),
+        agent=Agent(instructions=agent_instructions, tools=agent_tools),
     )
 
     logger.info("Gemini Live session started with configured system prompt and function tools.")
-
-    try:
-        if session_mode == "TUTOR":
-            await agent_session.generate_reply(
-                instructions="Greet briefly as Owlyn Assistant, confirm you can see the shared screen, and ask what coding/email/browsing task the user wants help with first."
-            )
-        else:
-            await agent_session.generate_reply(
-                instructions="Start the interview now. Give a brief greeting, confirm you are the interviewer, and ask the first interview question immediately."
-            )
-    except Exception as e:
-        logger.warning(f"Initial generate_reply failed; continuing with normal turn handling. error={e}")
 
     def append_transcript_line(role_label: str, text: str):
         clean_text = (text or "").strip()
@@ -217,6 +207,18 @@ async def entrypoint(ctx: JobContext):
     @agent_session.on("user_speech_committed")
     def on_user_speech(msg):
         append_transcript_line("CANDIDATE", getattr(msg, "text", ""))
+
+    try:
+        if session_mode == "TUTOR":
+            await agent_session.generate_reply(
+                instructions="Greet briefly as Owlyn Assistant, confirm you can see the shared screen, and ask what coding/email/browsing task the user wants help with first."
+            )
+        else:
+            await agent_session.generate_reply(
+                instructions="Start the interview now. Give a brief greeting, confirm you are the interviewer, and ask the first interview question immediately."
+            )
+    except Exception as e:
+        logger.warning(f"Initial generate_reply failed; continuing with normal turn handling. error={e}")
 
     async def notify_live_agent(trigger: str, instructions: str):
         if shutdown_event.is_set():

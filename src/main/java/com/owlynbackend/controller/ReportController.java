@@ -32,7 +32,7 @@ public class ReportController {
     @GetMapping("/{interviewId}")
     public ResponseEntity<ReportRes> getReport(
             @AuthenticationPrincipal UserDetails userDetails,
-            @PathVariable UUID interviewId) {
+            @PathVariable("interviewId") UUID interviewId) {
 
         return ResponseEntity.ok(reportService.getReport(userDetails, interviewId));
     }
@@ -40,7 +40,7 @@ public class ReportController {
     @PostMapping("/{interviewId}/feedback")
     public ResponseEntity<ReportRes> addFeedback(
             @AuthenticationPrincipal UserDetails userDetails,
-            @PathVariable UUID interviewId,
+            @PathVariable("interviewId") UUID interviewId,
             @RequestBody AddFeedbackReq req) {
 
         return ResponseEntity.ok(reportService.addHumanFeedback(userDetails, interviewId, req));

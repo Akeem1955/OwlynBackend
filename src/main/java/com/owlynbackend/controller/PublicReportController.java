@@ -14,7 +14,7 @@ public class PublicReportController {
     private final StringRedisTemplate stringRedisTemplate;
 
     @GetMapping("/{interviewId}")
-    public ResponseEntity<String> getEphemeralReport(@PathVariable String interviewId) {
+    public ResponseEntity<String> getEphemeralReport(@PathVariable("interviewId") String interviewId) {
         String redisKey = "ephemeral_report:" + interviewId;
         String jsonReport = stringRedisTemplate.opsForValue().get(redisKey);
 

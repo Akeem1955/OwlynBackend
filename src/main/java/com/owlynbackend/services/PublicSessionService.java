@@ -45,34 +45,37 @@ public class PublicSessionService {
     private final SecureRandom secureRandom = new SecureRandom();
 
     // The Hidden System Workspace for B2C Users
-    private Workspace getOrCreateSystemWorkspace() {
+    private synchronized Workspace getOrCreateSystemWorkspace() {
         return userRepository.findByEmail("system@owlyn.com")
-                .flatMap(user -> workspaceMemberRepository.findByUserId(user.getId()).map(WorkspaceMember::getWorkspace))
-                .orElseGet(() -> {
-                    User sysUser = User.builder()
-                            .email("system@owlyn.com")
-                            .fullName("Owlyn AI System")
-                            .password(passwordEncoder.encode(UUID.randomUUID().toString()))
-                            .role(Role.ADMIN)
-                            .build();
-                    userRepository.save(sysUser);
+                .flatMap(user -> workspaceMemberRepository.findByUserId(user.getId())
+                        .map(WorkspaceMember::getWorkspace))
+                .orElseGet(this::createSystemWorkspace);
+    }
 
-                    Workspace ws = Workspace.builder()
-                            .name("Owlyn Public Environment")
-                            .owner(sysUser)
-                            .build();
-                    workspaceRepository.save(ws);
+    private Workspace createSystemWorkspace() {
+        User sysUser = User.builder()
+                .email("system@owlyn.com")
+                .fullName("Owlyn AI System")
+                .password(passwordEncoder.encode(UUID.randomUUID().toString()))
+                .role(Role.ADMIN)
+                .build();
+        userRepository.save(sysUser);
 
-                    WorkspaceMember member = WorkspaceMember.builder()
-                            .id(new WorkspaceMember.WorkspaceMemberId(ws.getId(), sysUser.getId()))
-                            .workspace(ws)
-                            .user(sysUser)
-                            .role(Role.ADMIN)
-                            .build();
-                    workspaceMemberRepository.save(member);
+        Workspace ws = Workspace.builder()
+                .name("Owlyn Public Environment")
+                .owner(sysUser)
+                .build();
+        workspaceRepository.save(ws);
 
-                    return ws;
-                });
+        WorkspaceMember member = WorkspaceMember.builder()
+                .id(new WorkspaceMember.WorkspaceMemberId(ws.getId(), sysUser.getId()))
+                .workspace(ws)
+                .user(sysUser)
+                .role(Role.ADMIN)
+                .build();
+        workspaceMemberRepository.save(member);
+
+        return ws;
     }
 
     private String generateUniqueAccessCode() {

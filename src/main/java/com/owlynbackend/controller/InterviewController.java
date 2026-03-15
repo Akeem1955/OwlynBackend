@@ -52,10 +52,9 @@ public class InterviewController {
     @GetMapping("/{id}")
     public ResponseEntity<InterviewCreatedRes> getWorkspaceInterviewById(
             @AuthenticationPrincipal UserDetails userDetails,
-            @PathVariable java.util.UUID id) {
+            @PathVariable("id") java.util.UUID id) {
         return ResponseEntity.ok(interviewService.getWorkspaceInterviewById(userDetails, id));
     }
-
 
 
     // STEP 1: Candidate enters the 6-digit code (Public Endpoint)
@@ -66,20 +65,20 @@ public class InterviewController {
 
     // STEP 2: Candidate clicks "Start Interview" (Requires the Guest JWT they just got)
     @PutMapping("/{code}/status/active")
-    public ResponseEntity<Map<String, String>> activateInterview(@PathVariable String code) {
+    public ResponseEntity<Map<String, String>> activateInterview(@PathVariable("code") String code) {
         interviewService.startInterviewLockdown(code);
         return ResponseEntity.ok(Map.of("message", "Interview is now ACTIVE. Lockdown initiated."));
     }
 
     @PutMapping("/{code}/status/completed")
-    public ResponseEntity<Map<String, String>> completeInterview(@PathVariable String code) {
+    public ResponseEntity<Map<String, String>> completeInterview(@PathVariable("code") String code) {
         interviewService.completeInterviewByAccessCode(code);
         return ResponseEntity.ok(Map.of("message", "Interview completion requested. Status will be COMPLETED after report generation."));
     }
 
     @PostMapping("/{code}/session-ended")
     public ResponseEntity<Map<String, String>> notifySessionEnded(
-            @PathVariable String code,
+            @PathVariable("code") String code,
             @RequestBody(required = false) Map<String, String> payload) {
         interviewService.notifySessionEnded(code);
         String reason = payload != null && payload.get("reason") != null ? payload.get("reason") : "SESSION_ENDED";
@@ -95,7 +94,7 @@ public class InterviewController {
     @GetMapping("/{id}/monitor-token")
     public ResponseEntity<Map<String, String>> getMonitorToken(
             @AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails,
-            @PathVariable java.util.UUID id) {
+            @PathVariable("id") java.util.UUID id) {
 
         String lkToken = interviewService.getRecruiterMonitorToken(userDetails, id);
         return ResponseEntity.ok(Map.of("livekitToken", lkToken));

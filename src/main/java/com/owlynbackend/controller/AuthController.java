@@ -38,7 +38,7 @@ public class AuthController {
 
     // Step 2: Verify OTP and create User + Workspace
     @PostMapping("/verify-signup")
-    public ResponseEntity<AuthResponse> verifySignup(@RequestParam String otp, @RequestParam String email) {
+    public ResponseEntity<AuthResponse> verifySignup(@RequestParam("otp") String otp, @RequestParam("email") String email) {
         log.info("POST /api/auth/verify-signup - Received request for email: {}", email);
         AuthResponse response = authService.verifySignupAndCreateWorkspace(otp, email);
         log.info("POST /api/auth/verify-signup - Response: 200 OK - Signup successful for {}", email);
@@ -57,7 +57,7 @@ public class AuthController {
 
     // Step 2: Verify Login OTP
     @PostMapping("/verify-login")
-    public ResponseEntity<AuthResponse> verifyLogin(@RequestParam String otp, @RequestParam String email) {
+    public ResponseEntity<AuthResponse> verifyLogin(@RequestParam("otp") String otp, @RequestParam("email") String email) {
         log.info("POST /api/auth/verify-login - Received request for email: {}", email);
         AuthResponse response = authService.verifyLogin(otp, email);
         log.info("POST /api/auth/verify-login - Response: 200 OK - Login verification successful for {}", email);

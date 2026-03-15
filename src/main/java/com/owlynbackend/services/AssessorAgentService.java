@@ -90,7 +90,8 @@ public class AssessorAgentService {
                 // Enterprise B2B Flow: Save to PostgreSQL
                 InterviewReport report = InterviewReport.builder()
                         .interview(interview)
-                    .candidateEmail(interview.getAccessCode() != null ? interview.getAccessCode() : accessCode)
+                        .candidateEmail(interview.getCandidateEmail() != null ? interview.getCandidateEmail() : accessCode)
+                        .candidateName(interview.getCandidateName())
                         .score(reportData.getScore())
                         .behavioralNotes(reportData.getBehavioralNotes())
                         .codeOutput(reportData.getCodeOutput())
