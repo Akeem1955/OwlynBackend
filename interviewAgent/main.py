@@ -71,6 +71,10 @@ async def entrypoint(ctx: JobContext):
     forced_end_dispatched = False
     capture_tasks: list[asyncio.Task] = []
 
+    # Sentinel health tracking
+    vision_model_verified = False
+    vision_model_broken = False
+
     # ==========================================
     # 1. AGENT 2: NATIVE GEMINI LIVE API (BIDI)
     # ==========================================
@@ -134,8 +138,27 @@ async def entrypoint(ctx: JobContext):
         logger.warning(f"Tool called: end_interview_session(reason={reason})")
         return "Interview end signal dispatched."
 
+    # On-demand screen inspection tool — allows the live agent to look at the screen when asked
+    @llm.function_tool(
+        name="look_at_screen",
+        description=(
+            "Analyze the user's current screen share. "
+            "Call this when the user asks you to look at, review, or check their screen, "
+            "or when you want to proactively see what they are working on."
+        ),
+    )
+    async def look_at_screen() -> str:
+        if latest_screen_frame is None:
+            return "Screen share is not available. Ask the user to enable screen sharing."
+        prompt = (
+            "Describe what you see on this screen in detail, including any code, text, UI elements, "
+            "errors, or anything noteworthy. Be thorough but concise."
+        )
+        result = await analyze_single_frame(prompt, latest_screen_frame)
+        return result
+
     # Build tools list: Tutor mode gets Google Search grounding
-    agent_tools = [end_interview_session]
+    agent_tools = [end_interview_session, look_at_screen]
     if session_mode == "TUTOR":
         agent_tools.append(google.tools.GoogleSearch())
 
@@ -264,20 +287,26 @@ async def entrypoint(ctx: JobContext):
     # ==========================================
     # 3. AGENT 3: THE SENTINELS (BACKGROUND LOOPS)
     # ==========================================
-    async def analyze_frame_with_gemini(prompt: str, target_frame: rtc.VideoFrame | None) -> str:
+    def frame_to_jpeg_bytes(frame: rtc.VideoFrame) -> bytes:
+        """Convert a LiveKit VideoFrame to JPEG bytes for Gemini Vision."""
+        import io
+        rgba_buffer = frame.convert(rtc.VideoBufferType.RGBA)
+        image = Image.frombytes("RGBA", (rgba_buffer.width, rgba_buffer.height), bytes(rgba_buffer.data))
+        img_byte_arr = io.BytesIO()
+        image.convert("RGB").save(img_byte_arr, format='JPEG', quality=70)
+        return img_byte_arr.getvalue()
+
+    async def analyze_single_frame(prompt: str, target_frame: rtc.VideoFrame | None) -> str:
+        """Analyze a single frame with Gemini Vision. Used by the look_at_screen tool."""
+        nonlocal vision_model_verified, vision_model_broken
+
         if target_frame is None:
+            return "OK"
+        if vision_model_broken:
             return "OK"
 
         try:
-            rgba_buffer = target_frame.convert(rtc.VideoBufferType.RGBA)
-            image = Image.frombytes("RGBA", (rgba_buffer.width, rgba_buffer.height), bytes(rgba_buffer.data))
-
-            import io
-            img_byte_arr = io.BytesIO()
-            image.convert("RGB").save(img_byte_arr, format='JPEG', quality=70)
-            img_bytes = img_byte_arr.getvalue()
-
-            # Sentinels still use standard Vision for frame analysis
+            img_bytes = frame_to_jpeg_bytes(target_frame)
             response = await genai_client.aio.models.generate_content(
                 model="gemini-3.1-flash-lite-preview",
                 contents=[
@@ -285,83 +314,128 @@ async def entrypoint(ctx: JobContext):
                     types.Part.from_text(text=prompt)
                 ]
             )
+            if not vision_model_verified:
+                vision_model_verified = True
+                logger.info("Vision model verified: first sentinel analysis succeeded.")
             return response.text.strip() if response.text else "OK"
         except Exception as e:
-            logger.error(f"Vision Analysis Failed: {e}")
+            if not vision_model_verified:
+                vision_model_broken = True
+                logger.critical(
+                    f"VISION MODEL BROKEN on first call — all sentinel monitoring is now DISABLED. "
+                    f"Check that 'gemini-3.1-flash-lite-preview' is a valid model for your API key. Error: {e}"
+                )
+            else:
+                logger.error(f"Vision Analysis Failed: {e}")
+            return "OK"
+
+    async def analyze_multi_frame(prompt: str, frames: list[rtc.VideoFrame]) -> str:
+        """Analyze multiple frames in a single Gemini Vision request (proctor batch)."""
+        nonlocal vision_model_verified, vision_model_broken
+
+        if not frames:
+            return "OK"
+        if vision_model_broken:
+            return "OK"
+
+        try:
+            contents: list[types.Part] = []
+            for i, frame in enumerate(frames, 1):
+                img_bytes = frame_to_jpeg_bytes(frame)
+                contents.append(types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"))
+                contents.append(types.Part.from_text(text=f"(Snapshot {i} of {len(frames)})"))
+            contents.append(types.Part.from_text(text=prompt))
+
+            response = await genai_client.aio.models.generate_content(
+                model="gemini-3.1-flash-lite-preview",
+                contents=contents
+            )
+            if not vision_model_verified:
+                vision_model_verified = True
+                logger.info("Vision model verified: first sentinel analysis succeeded.")
+            return response.text.strip() if response.text else "OK"
+        except Exception as e:
+            if not vision_model_verified:
+                vision_model_broken = True
+                logger.critical(
+                    f"VISION MODEL BROKEN on first call — all sentinel monitoring is now DISABLED. "
+                    f"Check that 'gemini-3.1-flash-lite-preview' is a valid model for your API key. Error: {e}"
+                )
+            else:
+                logger.error(f"Vision Multi-Frame Analysis Failed: {e}")
             return "OK"
 
     async def proctor_sentinel():
+        """Every 5 minutes: collect 4 webcam snapshots (1 per minute), then analyze all 4 at once."""
         prompt = (
-            "Analyze this webcam frame for interview-integrity activity. "
-            "Detect and report concise warnings for activities such as: looking away repeatedly, using/holding a phone, eating/drinking, smoking/vaping, "
-            "covering face, talking to another person, leaving frame, multiple people, suspicious gestures/devices, or any non-serious behavior. "
-            "If no issue is visible, reply exactly 'OK'. "
+            "You are given 4 webcam snapshots taken 1 minute apart during a proctored interview. "
+            "Analyze ALL frames together for interview-integrity violations. "
+            "Detect and report concise warnings for activities such as: looking away repeatedly, "
+            "using/holding a phone, eating/drinking, smoking/vaping, covering face, talking to "
+            "another person, leaving frame, multiple people, suspicious gestures/devices, "
+            "or any non-serious behavior. "
+            "Consider patterns across the 4 snapshots (e.g., candidate absent in 3 of 4 frames). "
+            "If no issue is visible in any frame, reply exactly 'OK'. "
             "If issue exists, reply with one short warning sentence only."
         )
+        SNAPSHOTS_PER_CYCLE = 4
+        SNAPSHOT_INTERVAL_SECONDS = 60  # 1 snapshot per minute
+
         while not shutdown_event.is_set():
-            await asyncio.sleep(10)
+            # --- Collection phase: gather 4 snapshots over ~4 minutes ---
+            collected_frames: list[rtc.VideoFrame] = []
+            for i in range(SNAPSHOTS_PER_CYCLE):
+                await asyncio.sleep(SNAPSHOT_INTERVAL_SECONDS)
+                if shutdown_event.is_set():
+                    break
+                if latest_cam_frame is not None:
+                    collected_frames.append(latest_cam_frame)
+                    logger.info(f"Proctor snapshot {i + 1}/{SNAPSHOTS_PER_CYCLE} captured.")
+                else:
+                    logger.info(f"Proctor snapshot {i + 1}/{SNAPSHOTS_PER_CYCLE} skipped (no cam frame).")
+
             if shutdown_event.is_set():
                 break
-            result = await analyze_frame_with_gemini(prompt, latest_cam_frame)
+
+            if not collected_frames:
+                logger.info("Proctor cycle complete: no frames captured, skipping analysis.")
+                # Wait the remaining minute to complete the 5-min cycle
+                await asyncio.sleep(SNAPSHOT_INTERVAL_SECONDS)
+                continue
+
+            # --- Analysis phase: send all collected frames in one request ---
+            logger.info(f"Proctor cycle: analyzing {len(collected_frames)} frames...")
+            result = await analyze_multi_frame(prompt, collected_frames)
 
             if result != "OK" and result != "":
                 logger.warning(f"Proctor Alert: {result}")
                 transcript_builder.append(f"[PROCTOR ALERT]: {result}")
 
-                # Inject alert into the Gemini Live API via generate_reply
                 await notify_live_agent(
                     "PROCTOR_ALERT",
                     f"PROCTOR ALERT: {result}. Stop what you are doing and verbally warn the candidate right now."
                 )
 
-                payload = json.dumps({"type": "PROCTOR_WARNING", "message": result}).encode("utf-8")
-                await ctx.room.local_participant.publish_data(payload, reliable=True)
+                try:
+                    payload = json.dumps({"type": "PROCTOR_WARNING", "message": result}).encode("utf-8")
+                    await ctx.room.local_participant.publish_data(payload, reliable=True)
 
-                activity_payload = json.dumps(
-                    {"type": "PROCTOR_ACTIVITY", "message": result}
-                ).encode("utf-8")
-                await ctx.room.local_participant.publish_data(activity_payload, reliable=True)
+                    activity_payload = json.dumps(
+                        {"type": "PROCTOR_ACTIVITY", "message": result}
+                    ).encode("utf-8")
+                    await ctx.room.local_participant.publish_data(activity_payload, reliable=True)
+                except Exception as e:
+                    logger.warning(f"Failed publishing proctor alert to DataChannel: {e}")
 
-    async def workspace_sentinel():
-        if session_mode == "TUTOR":
-            prompt = "Look at this desktop screen. If there is a coding issue, email-writing issue, browsing/research opportunity, or workflow task you can help with, reply with one concise actionable assistant tip. If nothing actionable is visible, reply 'OK'."
-        else:
-            prompt = "Look at this code editor. Is there a syntax error or logic bug? If yes, reply with a short hint. If no, reply 'OK'."
-        while not shutdown_event.is_set():
-            await asyncio.sleep(15)
-            if shutdown_event.is_set():
-                break
-            result = await analyze_frame_with_gemini(prompt, latest_screen_frame)
-
-            if result != "OK" and result != "":
-                logger.info(f"Workspace Alert: {result}")
-                transcript_builder.append(f"[WORKSPACE BUG]: {result}")
-
-                workspace_payload = json.dumps(
-                    {"type": "WORKSPACE_ALERT", "message": result}
-                ).encode("utf-8")
-                await ctx.room.local_participant.publish_data(workspace_payload, reliable=True)
-
-                # Inject alert into the Gemini Live API via generate_reply
-                if session_mode == "TUTOR":
-                    await notify_live_agent(
-                        "WORKSPACE_ALERT",
-                        f"ASSISTANT SCREEN INSIGHT: {result}. Respond as a practical desktop assistant and suggest the next concrete action."
-                    )
-                else:
-                    await notify_live_agent(
-                        "WORKSPACE_ALERT",
-                        f"WORKSPACE ALERT: {result}. Give a concise interview-style hint and stay in interviewer role."
-                    )
+            # Wait the remaining minute to complete the 5-min cycle
+            await asyncio.sleep(SNAPSHOT_INTERVAL_SECONDS)
 
     proctor_task = None
     if session_mode != "TUTOR":
-        logger.info("Starting Proctor Sentinel (Strict Mode)")
+        logger.info("Starting Proctor Sentinel (5-min batch mode)")
         proctor_task = asyncio.create_task(proctor_sentinel())
     else:
-        logger.info("Tutor Mode: Proctor Sentinel DISABLED")
-
-    workspace_task = asyncio.create_task(workspace_sentinel())
+        logger.info("Tutor Mode: Proctor Sentinel DISABLED (screen insight via look_at_screen tool only)")
 
     # ==========================================
     # 4. INSTANT WAKE-UP (DATA CHANNELS)
@@ -371,12 +445,13 @@ async def entrypoint(ctx: JobContext):
         try:
             payload = json.loads(data_packet.data.decode("utf-8"))
             if payload.get("event") == "RUN_CODE":
-                logger.info("Candidate clicked RUN! Waking Workspace Sentinel instantly.")
-                asyncio.create_task(workspace_sentinel_immediate())
+                logger.info("Candidate clicked RUN! Triggering immediate screen analysis.")
+                asyncio.create_task(run_code_screen_check())
         except Exception as e:
             logger.error(f"Error handling DataChannel packet: {e}")
 
-    async def workspace_sentinel_immediate():
+    async def run_code_screen_check():
+        """Immediate screen analysis triggered by RUN_CODE event."""
         if shutdown_event.is_set():
             return
 
@@ -384,7 +459,7 @@ async def entrypoint(ctx: JobContext):
             if session_mode == "TUTOR":
                 await notify_live_agent(
                     "RUN_CODE_WITHOUT_SCREEN",
-                    "Screen share is not available yet. Ask the user to enable full screen sharing so you can assist with on-screen tasks."
+                    "The user clicked Run but screen share is not available yet. Ask them to enable screen sharing so you can review their work."
                 )
             else:
                 await notify_live_agent(
@@ -394,20 +469,20 @@ async def entrypoint(ctx: JobContext):
             return
 
         if session_mode == "TUTOR":
-            prompt = "Look at the current screen and provide one concise assistant recommendation for coding/email/browsing/productivity. If nothing actionable is present, reply 'OK'."
+            prompt = "The user just clicked Run. Look at the current screen and provide one concise recommendation — identify any errors, suggest fixes, or confirm things look good."
         else:
-            prompt = "Look at the code on the screen. The user just clicked run. Identify any bugs concisely. If fine, reply 'Your code looks good!'"
-        result = await analyze_frame_with_gemini(prompt, latest_screen_frame)
+            prompt = "The candidate just clicked Run Code. Look at the code on the screen. Identify any bugs concisely. If the code looks correct, reply 'Your code looks good!'"
+        result = await analyze_single_frame(prompt, latest_screen_frame)
         if result != "OK" and result != "":
             if session_mode == "TUTOR":
                 await notify_live_agent(
-                    "WORKSPACE_ALERT_IMMEDIATE",
-                    f"ASSISTANT SCREEN INSIGHT: {result}. Reply as an assistant with direct, actionable help."
+                    "RUN_CODE_SCREEN_CHECK",
+                    f"The user just ran their code. SCREEN INSIGHT: {result}. Respond with direct, actionable help."
                 )
             else:
                 await notify_live_agent(
-                    "WORKSPACE_ALERT_IMMEDIATE",
-                    f"WORKSPACE ALERT: {result}. Give a concise interview-style hint and stay in interviewer role."
+                    "RUN_CODE_SCREEN_CHECK",
+                    f"The candidate just ran their code. SCREEN INSIGHT: {result}. Give a concise interview-style hint and stay in interviewer role."
                 )
 
     async def finalize_interview(reason: str):
@@ -422,7 +497,6 @@ async def entrypoint(ctx: JobContext):
 
         if proctor_task:
             proctor_task.cancel()
-        workspace_task.cancel()
         for task in capture_tasks:
             task.cancel()
 
